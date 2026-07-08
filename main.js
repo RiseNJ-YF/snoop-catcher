@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, session, nativeImage, ipcMain } = require('electron');
+const { app, BrowserWindow, Tray, Menu, session, nativeImage, ipcMain, screen } = require('electron');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -77,8 +77,9 @@ function createTray(){
 function createPopup(){
   popup = new BrowserWindow({
     show: false, frame: false, skipTaskbar: true,
+    transparent: true, hasShadow: false,
     resizable: false, movable: false, minimizable: false, maximizable: false,
-    fullscreenable: true, backgroundColor: '#ff8f1f',
+    fullscreenable: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -89,23 +90,23 @@ function createPopup(){
   popup.setAlwaysOnTop(true, 'screen-saver');
 }
 
-// Show ONLY the popup fullscreen over everything; the app window is untouched.
+// Show ONLY the popup over everything; the app window is untouched.
 ipcMain.on('popup-show', (e, data) => {
   if (!popup) return;
+  try { popup.setBounds(screen.getPrimaryDisplay().bounds); } catch(_){}
+  // Real desktop blur behind the window on Windows 11 (acrylic); harmless elsewhere.
+  try { popup.setBackgroundMaterial(data && data.style === 'blur' ? 'acrylic' : 'none'); } catch(_){}
   popup.webContents.send('render', data);
-  popup.show();
-  popup.setFullScreen(true);
   popup.setAlwaysOnTop(true, 'screen-saver');
+  popup.show();
   popup.focus();
 });
 ipcMain.on('popup-hide', () => {
-  if (!popup) return;
-  popup.setFullScreen(false);
-  popup.hide();
+  if (popup) popup.hide();
 });
 // Dismiss initiated from inside the popup window -> hide it and tell the app to snooze.
 ipcMain.on('popup-dismiss', () => {
-  if (popup) { popup.setFullScreen(false); popup.hide(); }
+  if (popup) popup.hide();
   if (win) win.webContents.send('app-dismiss');
 });
 

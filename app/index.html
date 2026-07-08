@@ -95,6 +95,13 @@
     <button id="reachMax" class="on">Max</button>
   </div>
 
+  <div class="seg" title="What appears when a snooper is caught. Dim darkens the screen; Blur frosts it (true blur on Windows 11).">
+    <button id="styleFace" class="on">Face</button>
+    <button id="styleDim">Dim</button>
+    <button id="styleBlur">Blur</button>
+  </div>
+  <button id="testBtn" title="Preview the selected popup style now, without waiting for a real trigger">Test popup</button>
+
   <button id="zoneBtn" disabled title="Look at your monitor from where a snooper would be, then capture. Repeat from a few spots.">Set trigger zone</button>
   <span class="pill" id="zonePill">zone: 0</span>
   <button id="zoneClear" class="danger" title="Clear captured trigger-zone samples">Clear zone</button>
@@ -171,6 +178,8 @@ const els = {
   enroll:$('enrollBtn'), watch:$('watchBtn'), reset:$('resetBtn'), fs:$('fsBtn'),
   modeRange:$('modeRange'), modePrecision:$('modePrecision'),
   reachNear:$('reachNear'), reachFar:$('reachFar'), reachMax:$('reachMax'),
+  styleFace:$('styleFace'), styleDim:$('styleDim'), styleBlur:$('styleBlur'),
+  testBtn:$('testBtn'),
   zoneBtn:$('zoneBtn'), zonePill:$('zonePill'), zoneClear:$('zoneClear'),
   meThresh:$('meThresh'), tol:$('tol'), delay:$('delay'), delayCap:$('delayCap'), debug:$('debug'),
   camHint:$('camHint'), rec:$('rec'), countdown:$('countdown'),
@@ -187,6 +196,7 @@ let watching = false;
 let lastSnoopAt = 0;
 let snoopSince = 0;        // when a snooper first appeared continuously (for the delay)
 let cooldownUntil = 0;    // after a manual dismiss, suppress re-popping until this time
+let manualHold = false;   // a manual "Test popup" is showing — don't let the watch loop auto-close it
 const SNOOP_LINGER_MS = 1600;
 const COOLDOWN_MS = 5000; // snooze after you close the popup
 
@@ -207,6 +217,7 @@ function grid(cols, rows){
 }
 const REACH = { near: [], far: grid(2,2), max: grid(3,2) };
 let reach = 'max';
+let popupStyle = 'face';   // 'face' | 'dim' | 'blur'
 
 /* ---------- funny faces ---------- */
 const FACES = [
@@ -264,6 +275,7 @@ async function boot(){
   updateZonePill();
   if(meDescriptor){ els.watch.disabled=false; setStatus("Ready — enrolled","armed"); }
   else setStatus("Enroll your face","warm");
+  try{ const s=localStorage.getItem('snoopcatch.style.v1'); if(s) setStyle(s); }catch(e){}
   updateModeNote();
 }
 
@@ -451,7 +463,7 @@ async function tick(){
   if(qualified) lastSnoopAt=now;
   const active=(now-lastSnoopAt)<SNOOP_LINGER_MS;
   if(active && !els.gotcha.classList.contains('show')) showGotcha();
-  else if(!active && els.gotcha.classList.contains('show')) hideGotcha();
+  else if(!active && !manualHold && els.gotcha.classList.contains('show')) hideGotcha();
 
   let armMsg='';
   if(snoopSince) armMsg = inCooldown ? 'snoozed' : (qualified ? 'POP' : `arming ${((now-snoopSince)/1000).toFixed(1)}/${(dwell/1000).toFixed(1)}s`);
@@ -502,7 +514,7 @@ function drawOverlay(items, armMsg){
 }
 
 /* ---------- gotcha ---------- */
-function showGotcha(){ const faceSvg=FACES[Math.floor(Math.random()*FACES.length)]; const banner=BANNERS[Math.floor(Math.random()*BANNERS.length)]; els.faceHolder.innerHTML=faceSvg; els.gotchaText.textContent=banner; els.gotcha.classList.add('show'); try{window.snoopcatcher&&window.snoopcatcher.popupShow&&window.snoopcatcher.popupShow(faceSvg,banner);}catch(e){} }
+function showGotcha(){ const faceSvg=FACES[Math.floor(Math.random()*FACES.length)]; const banner=BANNERS[Math.floor(Math.random()*BANNERS.length)]; els.faceHolder.innerHTML=faceSvg; els.gotchaText.textContent=banner; els.gotcha.classList.add('show'); try{window.snoopcatcher&&window.snoopcatcher.popupShow&&window.snoopcatcher.popupShow(faceSvg,banner,popupStyle);}catch(e){} }
 function hideGotcha(){ els.gotcha.classList.remove('show'); try{window.snoopcatcher&&window.snoopcatcher.popupHide&&window.snoopcatcher.popupHide();}catch(e){} }
 
 /* ---------- watch controls ---------- */
@@ -531,9 +543,14 @@ function setReach(r){ reach=r; els.reachNear.classList.toggle('on',r==='near'); 
 els.reachNear.addEventListener('click', ()=>setReach('near'));
 els.reachFar.addEventListener('click', ()=>setReach('far'));
 els.reachMax.addEventListener('click', ()=>setReach('max'));
+function setStyle(s){ popupStyle=s; els.styleFace.classList.toggle('on',s==='face'); els.styleDim.classList.toggle('on',s==='dim'); els.styleBlur.classList.toggle('on',s==='blur'); try{localStorage.setItem('snoopcatch.style.v1',s);}catch(e){} }
+els.styleFace.addEventListener('click', ()=>setStyle('face'));
+els.styleDim.addEventListener('click', ()=>setStyle('dim'));
+els.styleBlur.addEventListener('click', ()=>setStyle('blur'));
+els.testBtn.addEventListener('click', ()=>{ manualHold=true; showGotcha(); });
 els.fs.addEventListener('click', ()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); });
 els.delay.addEventListener('input', ()=>{ els.delayCap.textContent = parseFloat(els.delay.value).toFixed(2).replace(/0$/,'')+'s'; });
-function dismissGotcha(){ hideGotcha(); snoopSince=0; lastSnoopAt=0; cooldownUntil=performance.now()+COOLDOWN_MS; }
+function dismissGotcha(){ manualHold=false; hideGotcha(); snoopSince=0; lastSnoopAt=0; cooldownUntil=performance.now()+COOLDOWN_MS; }
 $('gotchaClose').addEventListener('click', (e)=>{ e.stopPropagation(); dismissGotcha(); });
 els.gotcha.addEventListener('click', dismissGotcha);
 

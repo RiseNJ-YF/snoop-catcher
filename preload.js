@@ -5,7 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 // index.html still runs in a normal browser (where these are simply absent).
 contextBridge.exposeInMainWorld('snoopcatcher', {
   // --- app window -> main ---
-  popupShow: (faceSvg, banner) => ipcRenderer.send('popup-show', { faceSvg, banner }),
+  popupShow: (faceSvg, banner, style) => ipcRenderer.send('popup-show', { faceSvg, banner, style }),
   popupHide: () => ipcRenderer.send('popup-hide'),
   onDismiss: (cb) => ipcRenderer.on('app-dismiss', () => cb()),
   // --- popup window <-> main ---
