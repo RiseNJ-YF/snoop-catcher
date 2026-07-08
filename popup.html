@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Snoop Catcher</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden}
+  body{
+    display:grid; place-items:center; text-align:center; cursor:pointer;
+    background:radial-gradient(120% 120% at 50% 30%,#ffd23f 0%,#ff8f1f 55%,#ff5e1f 100%);
+    font-family:ui-monospace,Menlo,Consolas,monospace;
+  }
+  .face{width:min(46vh,340px); height:auto; animation:wobble 1.1s ease-in-out infinite}
+  @keyframes wobble{0%,100%{transform:rotate(-5deg)}50%{transform:rotate(5deg)}}
+  .banner{margin-top:14px; font-weight:700; color:#3a1a00; font-size:clamp(28px,6vw,72px); letter-spacing:.06em; text-shadow:0 2px 0 rgba(255,255,255,.35)}
+  .sub{margin-top:8px; color:#6a3400; font-size:clamp(13px,2vw,20px); letter-spacing:.18em}
+  .hint{margin-top:20px; color:#7a3d00; font-size:13px; letter-spacing:.06em; opacity:.85}
+  .close{position:fixed; top:18px; right:18px; width:58px; height:58px; border-radius:50%; border:none;
+    background:rgba(58,26,0,.88); color:#ffd23f; font-size:28px; font-weight:700; cursor:pointer;
+    display:grid; place-items:center}
+  .close:hover{background:#3a1a00}
+  @media (prefers-reduced-motion:reduce){.face{animation:none}}
+</style>
+</head>
+<body>
+  <button class="close" id="close" aria-label="Close">✕</button>
+  <div>
+    <div id="faceHolder"></div>
+    <div class="banner" id="banner">👀 BUSTED</div>
+    <div class="sub">EYES ON YOUR OWN SCREEN</div>
+    <div class="hint">tap ✕ or anywhere to dismiss</div>
+  </div>
+<script>
+  const sc = window.snoopcatcher;
+  if (sc && sc.onRender) sc.onRender((data) => {
+    if (data && data.faceSvg) document.getElementById('faceHolder').innerHTML = data.faceSvg;
+    if (data && data.banner) document.getElementById('banner').textContent = data.banner;
+  });
+  function dismiss(){ if (sc && sc.popupDismiss) sc.popupDismiss(); }
+  document.getElementById('close').addEventListener('click', (e) => { e.stopPropagation(); dismiss(); });
+  document.body.addEventListener('click', dismiss);
+</script>
+</body>
+</html>

@@ -10,7 +10,7 @@ const MIME = {
   '.png':'image/png', '.svg':'image/svg+xml', '.ico':'image/x-icon', '.css':'text/css'
 };
 
-let server, baseURL, win, tray;
+let server, baseURL, win, tray, popup;
 
 // Serve the app/ folder over 127.0.0.1 so it runs in a secure context
 // (needed for camera + service worker; file:// is not trusted for getUserMedia).
@@ -43,7 +43,8 @@ function createWindow(){
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      backgroundThrottling: false   // keep watching at full speed while minimized/hidden
     }
   });
   if (win.removeMenu) win.removeMenu();
@@ -67,18 +68,41 @@ function createTray(){
   tray.on('click', () => { win.isVisible() ? win.focus() : win.show(); });
 }
 
-// When the app catches a snooper, blanket the whole monitor over other apps.
-ipcMain.on('snoop-popup', () => {
-  if (!win) return;
-  if (!win.isVisible()) win.show();
-  win.setAlwaysOnTop(true, 'screen-saver'); // sit above other applications
-  win.setFullScreen(true);                  // cover the entire screen
-  win.focus();
+// A separate always-on-top fullscreen window that shows ONLY the funny face,
+// independent of the main app window (which can be minimized / in the tray).
+function createPopup(){
+  popup = new BrowserWindow({
+    show: false, frame: false, skipTaskbar: true,
+    resizable: false, movable: false, minimizable: false, maximizable: false,
+    fullscreenable: true, backgroundColor: '#ff8f1f',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  popup.loadFile(path.join(__dirname, 'popup.html'));
+  popup.setAlwaysOnTop(true, 'screen-saver');
+}
+
+// Show ONLY the popup fullscreen over everything; the app window is untouched.
+ipcMain.on('popup-show', (e, data) => {
+  if (!popup) return;
+  popup.webContents.send('render', data);
+  popup.show();
+  popup.setFullScreen(true);
+  popup.setAlwaysOnTop(true, 'screen-saver');
+  popup.focus();
 });
-ipcMain.on('snoop-dismiss', () => {
-  if (!win) return;
-  win.setFullScreen(false);
-  win.setAlwaysOnTop(false);
+ipcMain.on('popup-hide', () => {
+  if (!popup) return;
+  popup.setFullScreen(false);
+  popup.hide();
+});
+// Dismiss initiated from inside the popup window -> hide it and tell the app to snooze.
+ipcMain.on('popup-dismiss', () => {
+  if (popup) { popup.setFullScreen(false); popup.hide(); }
+  if (win) win.webContents.send('app-dismiss');
 });
 
 // Single instance so it doesn't launch twice
@@ -92,6 +116,7 @@ if (!app.requestSingleInstanceLock()) {
     await startServer();
     createWindow();
     createTray();
+    createPopup();
   });
   // Keep running in the tray even with no window open.
   app.on('window-all-closed', () => {});

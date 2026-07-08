@@ -445,8 +445,8 @@ function drawOverlay(items, armMsg){
 }
 
 /* ---------- gotcha ---------- */
-function showGotcha(){ els.faceHolder.innerHTML=FACES[Math.floor(Math.random()*FACES.length)]; els.gotchaText.textContent=BANNERS[Math.floor(Math.random()*BANNERS.length)]; els.gotcha.classList.add('show'); try{window.snoopcatcher&&window.snoopcatcher.popup&&window.snoopcatcher.popup();}catch(e){} }
-function hideGotcha(){ els.gotcha.classList.remove('show'); }
+function showGotcha(){ const faceSvg=FACES[Math.floor(Math.random()*FACES.length)]; const banner=BANNERS[Math.floor(Math.random()*BANNERS.length)]; els.faceHolder.innerHTML=faceSvg; els.gotchaText.textContent=banner; els.gotcha.classList.add('show'); try{window.snoopcatcher&&window.snoopcatcher.popupShow&&window.snoopcatcher.popupShow(faceSvg,banner);}catch(e){} }
+function hideGotcha(){ els.gotcha.classList.remove('show'); try{window.snoopcatcher&&window.snoopcatcher.popupHide&&window.snoopcatcher.popupHide();}catch(e){} }
 
 /* ---------- watch controls ---------- */
 function startWatching(){ if(!meDescriptor) return;
@@ -472,11 +472,14 @@ els.modeRange.addEventListener('click', ()=>setMode('range'));
 els.modePrecision.addEventListener('click', ()=>setMode('precision'));
 els.fs.addEventListener('click', ()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); });
 els.delay.addEventListener('input', ()=>{ els.delayCap.textContent = parseFloat(els.delay.value).toFixed(2).replace(/0$/,'')+'s'; });
-function dismissGotcha(){ hideGotcha(); snoopSince=0; lastSnoopAt=0; cooldownUntil=performance.now()+COOLDOWN_MS; try{window.snoopcatcher&&window.snoopcatcher.dismiss&&window.snoopcatcher.dismiss();}catch(e){} }
+function dismissGotcha(){ hideGotcha(); snoopSince=0; lastSnoopAt=0; cooldownUntil=performance.now()+COOLDOWN_MS; }
 $('gotchaClose').addEventListener('click', (e)=>{ e.stopPropagation(); dismissGotcha(); });
 els.gotcha.addEventListener('click', dismissGotcha);
 
 boot();
+
+// Desktop (Electron): when the fullscreen popup window is dismissed, snooze here too.
+try{ window.snoopcatcher && window.snoopcatcher.onDismiss && window.snoopcatcher.onDismiss(function(){ dismissGotcha(); }); }catch(e){}
 
 /* ---------- PWA ---------- */
 if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{})); }

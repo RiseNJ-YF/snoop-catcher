@@ -16,7 +16,7 @@
   "build": {
     "appId": "com.snoopcatcher.app",
     "productName": "Snoop Catcher",
-    "files": ["main.js", "preload.js", "app/**/*"],
+    "files": ["main.js", "preload.js", "popup.html", "app/**/*"],
     "directories": { "buildResources": "build" },
     "win": { "target": "nsis" },
     "mac": { "target": "dmg", "category": "public.app-category.utilities" },
