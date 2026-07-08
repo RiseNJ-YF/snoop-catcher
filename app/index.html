@@ -89,6 +89,12 @@
     <button id="modePrecision">Precision</button>
   </div>
 
+  <div class="seg" title="Detection reach. Far/Max tile the whole frame with zoomed passes to catch faces further away. Max = 3x2 tiles (longest reach, slowest); Far = 2x2 (lighter); Near = full frame only (fastest).">
+    <button id="reachNear">Near</button>
+    <button id="reachFar">Far</button>
+    <button id="reachMax" class="on">Max</button>
+  </div>
+
   <button id="zoneBtn" disabled title="Look at your monitor from where a snooper would be, then capture. Repeat from a few spots.">Set trigger zone</button>
   <span class="pill" id="zonePill">zone: 0</span>
   <button id="zoneClear" class="danger" title="Clear captured trigger-zone samples">Clear zone</button>
@@ -164,6 +170,7 @@ const els = {
   video:$('video'), ov:$('overlay'), status:$('status'), statusText:$('statusText'),
   enroll:$('enrollBtn'), watch:$('watchBtn'), reset:$('resetBtn'), fs:$('fsBtn'),
   modeRange:$('modeRange'), modePrecision:$('modePrecision'),
+  reachNear:$('reachNear'), reachFar:$('reachFar'), reachMax:$('reachMax'),
   zoneBtn:$('zoneBtn'), zonePill:$('zonePill'), zoneClear:$('zoneClear'),
   meThresh:$('meThresh'), tol:$('tol'), delay:$('delay'), delayCap:$('delayCap'), debug:$('debug'),
   camHint:$('camHint'), rec:$('rec'), countdown:$('countdown'),
@@ -189,7 +196,17 @@ const pctx = proc.getContext('2d', { willReadFrequently:true });
 // central-crop canvas for detecting faces further away (~up to 10 ft)
 const crop = document.createElement('canvas');
 const cctx = crop.getContext('2d', { willReadFrequently:true });
-let cropBox = { x:0, y:0, w:0, h:0 };   // crop region in proc-space coords
+// Reach = extra zoom passes arranged as a grid of tiles that covers the whole frame.
+// Each tile: cx,cy = center; fw,fh = size (fraction of frame), with slight overlap so
+// faces on a seam still land fully inside at least one tile.
+function grid(cols, rows){
+  const fw = 1/cols + 0.07, fh = 1/rows + 0.10;
+  const tiles = [];
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++) tiles.push({ cx:(c+0.5)/cols, cy:(r+0.5)/rows, fw, fh });
+  return tiles;
+}
+const REACH = { near: [], far: grid(2,2), max: grid(3,2) };
+let reach = 'max';
 
 /* ---------- funny faces ---------- */
 const FACES = [
@@ -227,7 +244,7 @@ async function boot(){
   }
   try{
     setStatus("Starting camera","warm");
-    const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:{ideal:1920}, height:{ideal:1080}, facingMode:"user" } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:{ideal:3840}, height:{ideal:2160}, facingMode:"user" } });
     els.video.srcObject = stream;
     await els.video.play().catch(()=>{});
   }catch(e){
@@ -238,9 +255,6 @@ async function boot(){
   const vw = els.video.videoWidth||1280, vh = els.video.videoHeight||720;
   const pw = 960, ph = Math.round(pw*vh/vw);
   proc.width=pw; proc.height=ph; els.ov.width=pw; els.ov.height=ph;
-  // central crop = middle 55% of the frame, drawn at native detail for extra reach
-  cropBox = { x:pw*0.225, y:ph*0.225, w:pw*0.55, h:ph*0.55 };
-  crop.width = 720; crop.height = Math.round(720*ph/pw);
 
   els.camHint.style.display="none";
   els.enroll.disabled=false; els.zoneBtn.disabled=false;
@@ -286,15 +300,26 @@ function facesFromResult(res, ox, oy, sw, sh){
 function detectGaze(tsMs){
   // Pass 1: full frame (catches near + wide faces).
   const faces = facesFromResult(landmarker.detectForVideo(proc, tsMs), 0, 0, proc.width, proc.height);
-  // Pass 2: zoomed center crop (catches faces further away, ~up to 10 ft).
-  cctx.drawImage(els.video,
-    els.video.videoWidth*0.225, els.video.videoHeight*0.225, els.video.videoWidth*0.55, els.video.videoHeight*0.55,
-    0, 0, crop.width, crop.height);
-  const cropFaces = facesFromResult(landmarker2.detect(crop), cropBox.x, cropBox.y, cropBox.w, cropBox.h);
-  // Add crop-only faces (skip ones already found in the full-frame pass).
   const near = proc.width*0.06;
-  for(const cf of cropFaces){
-    if(!faces.some(f => Math.hypot(f.cx-cf.cx, f.cy-cf.cy) < near)) faces.push(cf);
+  const vw = els.video.videoWidth, vh = els.video.videoHeight;
+  // Extra zoom passes on the left/right side regions for distant snoopers.
+  for(const r of REACH[reach]){
+    // clamp the region to the frame so raised/enlarged zones never run off-screen
+    const x0=Math.max(0,r.cx-r.fw/2), y0=Math.max(0,r.cy-r.fh/2);
+    const x1=Math.min(1,r.cx+r.fw/2), y1=Math.min(1,r.cy+r.fh/2);
+    const fw=x1-x0, fh=y1-y0;
+    if(fw<=0 || fh<=0) continue;
+    const px0 = proc.width*x0, py0 = proc.height*y0;
+    const pW = proc.width*fw, pH = proc.height*fh;
+    // size the crop canvas to the region's aspect so the face isn't distorted
+    crop.width = 800; crop.height = Math.max(1, Math.round(800 * pH / pW));
+    cctx.drawImage(els.video,
+      vw*x0, vh*y0, vw*fw, vh*fh,
+      0, 0, crop.width, crop.height);
+    const cf = facesFromResult(landmarker2.detect(crop), px0, py0, pW, pH);
+    for(const face of cf){
+      if(!faces.some(g => Math.hypot(g.cx-face.cx, g.cy-face.cy) < near)) faces.push(face);
+    }
   }
   return faces;
 }
@@ -443,6 +468,16 @@ function drawOverlay(items, armMsg){
   const ctx=els.ov.getContext('2d');
   ctx.clearRect(0,0,els.ov.width,els.ov.height);
   if(!els.debug.checked) return;
+  // show the side reach zones (dashed) so the camera can be aimed at them
+  if(REACH[reach].length){
+    ctx.save(); ctx.setLineDash([7,6]); ctx.strokeStyle="#4aa3ff"; ctx.lineWidth=2;
+    for(const r of REACH[reach]){
+      const x0=Math.max(0,r.cx-r.fw/2), y0=Math.max(0,r.cy-r.fh/2);
+      const x1=Math.min(1,r.cx+r.fw/2), y1=Math.min(1,r.cy+r.fh/2);
+      ctx.strokeRect(els.ov.width*x0, els.ov.height*y0, els.ov.width*(x1-x0), els.ov.height*(y1-y0));
+    }
+    ctx.restore();
+  }
   ctx.lineWidth=3; ctx.font="13px monospace"; ctx.textBaseline="bottom";
   for(const it of items){
     const {x,y,w,h}=it.box;
@@ -492,6 +527,10 @@ els.zoneBtn.addEventListener('click', captureZone);
 els.zoneClear.addEventListener('click', ()=>{ zoneSamples=[]; saveZone(); updateZonePill(); setStatus("Zone cleared","warm"); });
 els.modeRange.addEventListener('click', ()=>setMode('range'));
 els.modePrecision.addEventListener('click', ()=>setMode('precision'));
+function setReach(r){ reach=r; els.reachNear.classList.toggle('on',r==='near'); els.reachFar.classList.toggle('on',r==='far'); els.reachMax.classList.toggle('on',r==='max'); }
+els.reachNear.addEventListener('click', ()=>setReach('near'));
+els.reachFar.addEventListener('click', ()=>setReach('far'));
+els.reachMax.addEventListener('click', ()=>setReach('max'));
 els.fs.addEventListener('click', ()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); });
 els.delay.addEventListener('input', ()=>{ els.delayCap.textContent = parseFloat(els.delay.value).toFixed(2).replace(/0$/,'')+'s'; });
 function dismissGotcha(){ hideGotcha(); snoopSince=0; lastSnoopAt=0; cooldownUntil=performance.now()+COOLDOWN_MS; }
