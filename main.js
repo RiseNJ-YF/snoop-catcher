@@ -40,6 +40,10 @@ function createWindow(){
     backgroundColor: '#0e1113',
     icon: path.join(APP_DIR, 'icon-512.png'),
     title: 'Snoop Catcher',
+    minimizable: true,
+    maximizable: true,
+    closable: true,
+    fullscreenable: false,   // never let the app window itself go fullscreen (it hides the title-bar buttons)
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -49,8 +53,8 @@ function createWindow(){
   });
   if (win.removeMenu) win.removeMenu();
   win.loadURL(baseURL);
-  // Closing the window keeps the app running in the tray (always-on).
-  win.on('close', (e) => { if (!app.isQuitting) { e.preventDefault(); win.hide(); } });
+  // Standard buttons: minimize keeps it running in the background; close quits the app.
+  win.on('closed', () => { app.quit(); });
 }
 
 function createTray(){
@@ -63,7 +67,7 @@ function createTray(){
       checked: app.getLoginItemSettings().openAtLogin,
       click: (mi) => app.setLoginItemSettings({ openAtLogin: mi.checked }) },
     { type: 'separator' },
-    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } }
+    { label: 'Quit', click: () => { app.quit(); } }
   ]));
   tray.on('click', () => { win.isVisible() ? win.focus() : win.show(); });
 }
@@ -118,7 +122,6 @@ if (!app.requestSingleInstanceLock()) {
     createTray();
     createPopup();
   });
-  // Keep running in the tray even with no window open.
-  app.on('window-all-closed', () => {});
+  app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => { if (win) win.show(); });
 }
