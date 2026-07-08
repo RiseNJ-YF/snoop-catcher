@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Snoop Catcher</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="theme-color" content="#0e1113">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Snoop Catcher">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<style>
+  :root{
+    --bg:#0e1113; --panel:#161b1e; --line:#262f34;
+    --ink:#e7edf0; --dim:#7d8b92;
+    --amber:#f0b429; --green:#39d98a; --alarm:#ff4d4d; --blue:#4aa3ff;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg); color:var(--ink); font-family:var(--sans); display:flex; flex-direction:column; min-height:100%; -webkit-font-smoothing:antialiased}
+  header{display:flex; align-items:center; gap:9px; flex-wrap:wrap; padding:11px 14px; background:var(--panel); border-bottom:1px solid var(--line)}
+  .brand{font-family:var(--mono); font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin-right:4px; white-space:nowrap}
+  .brand b{color:var(--ink); font-weight:600}
+  .status{font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase; padding:5px 10px; border:1px solid var(--line); border-radius:2px; color:var(--dim); display:inline-flex; align-items:center; gap:7px; white-space:nowrap}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--dim)}
+  .status.armed{color:var(--green); border-color:#1e4735} .status.armed .dot{background:var(--green); box-shadow:0 0 8px var(--green)}
+  .status.alarm{color:var(--alarm); border-color:#5c2020} .status.alarm .dot{background:var(--alarm); box-shadow:0 0 8px var(--alarm)}
+  .status.warm{color:var(--amber); border-color:#5a4416} .status.warm .dot{background:var(--amber)}
+  .spacer{flex:1}
+  button{font-family:var(--sans); font-size:13px; font-weight:500; color:var(--ink); background:#1f272b; border:1px solid var(--line); border-radius:3px; padding:8px 12px; cursor:pointer; transition:background .12s,border-color .12s}
+  button:hover:not(:disabled){background:#273034; border-color:#3a464c}
+  button:focus-visible{outline:2px solid var(--amber); outline-offset:2px}
+  button:disabled{opacity:.4; cursor:not-allowed}
+  button.primary{background:var(--amber); color:#181203; border-color:var(--amber); font-weight:600}
+  button.primary:hover:not(:disabled){background:#f7c04a}
+  button.danger{color:#ff9b9b}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:3px; overflow:hidden}
+  .seg button{border:none; border-radius:0; background:#1a2024; font-size:12px; padding:8px 12px}
+  .seg button.on{background:var(--blue); color:#04121f; font-weight:600}
+  .ctl{display:inline-flex; align-items:center; gap:7px; font-size:12px; color:var(--dim)}
+  .ctl input[type=range]{accent-color:var(--amber); width:104px}
+  .ctl .cap{font-family:var(--mono); font-size:9px; letter-spacing:.05em; color:#5c6a70}
+  .ctl label{cursor:pointer; user-select:none; display:inline-flex; align-items:center; gap:6px}
+  .pill{font-family:var(--mono); font-size:11px; color:var(--dim); border:1px dashed var(--line); border-radius:3px; padding:5px 8px}
+  main{flex:1; display:flex; align-items:center; justify-content:center; padding:18px; position:relative}
+  .monitor{position:relative; width:min(94vw,900px); aspect-ratio:16/10; background:#000; border:1px solid var(--line); border-radius:6px; overflow:hidden; box-shadow:0 0 0 1px #000 inset, 0 18px 54px rgba(0,0,0,.5)}
+  video,canvas.ov{position:absolute; inset:0; width:100%; height:100%}
+  video{object-fit:cover; transform:scaleX(-1)}
+  canvas.ov{transform:scaleX(-1); pointer-events:none}
+  .monitor::after{content:""; position:absolute; inset:0; pointer-events:none; opacity:.32; background:repeating-linear-gradient(0deg,transparent 0 2px,rgba(0,0,0,.14) 2px 3px); mix-blend-mode:multiply}
+  .cam-hint{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; padding:24px; color:var(--dim); font-family:var(--mono); font-size:13px; letter-spacing:.04em; line-height:1.7; z-index:2}
+  .rec{position:absolute; top:10px; left:12px; z-index:3; font-family:var(--mono); font-size:11px; letter-spacing:.14em; color:var(--dim); display:flex; align-items:center; gap:6px}
+  .rec .dot{background:var(--alarm); animation:blink 1.4s steps(1) infinite}
+  @keyframes blink{50%{opacity:.15}}
+  .countdown{position:absolute; inset:0; z-index:4; display:none; place-items:center; background:rgba(0,0,0,.45); font-family:var(--mono); font-size:min(22vh,150px); color:var(--blue); font-weight:700}
+  .countdown.show{display:grid}
+  .gotcha{position:fixed; inset:0; z-index:999; display:none; place-items:center; background:radial-gradient(120% 120% at 50% 30%,#ffd23f 0%,#ff8f1f 55%,#ff5e1f 100%); text-align:center}
+  .gotcha.show{display:grid; animation:pop .18s ease-out}
+  @keyframes pop{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
+  .gotcha .face{width:min(46vh,340px); height:auto; animation:wobble 1.1s ease-in-out infinite}
+  @keyframes wobble{0%,100%{transform:rotate(-5deg)}50%{transform:rotate(5deg)}}
+  .gotcha .banner{margin-top:14px; font-family:var(--mono); font-weight:700; color:#3a1a00; font-size:clamp(26px,6vw,64px); letter-spacing:.06em; text-shadow:0 2px 0 rgba(255,255,255,.35)}
+  .gotcha .sub{margin-top:6px; font-family:var(--mono); color:#6a3400; font-size:clamp(12px,2vw,18px); letter-spacing:.18em}
+  .gotcha .hint{margin-top:18px; font-family:var(--mono); color:#7a3d00; font-size:12px; letter-spacing:.06em; opacity:.85}
+  .gotcha .close{position:absolute; top:16px; right:16px; width:54px; height:54px; border-radius:50%; border:none; background:rgba(58,26,0,.88); color:#ffd23f; font-size:26px; font-weight:700; line-height:1; cursor:pointer; display:grid; place-items:center; z-index:2}
+  .gotcha .close:hover{background:#3a1a00}
+  .gotcha .close:focus-visible{outline:3px solid #3a1a00; outline-offset:3px}
+  @media (prefers-reduced-motion:reduce){.gotcha.show,.gotcha .face{animation:none}}
+  footer{padding:9px 14px; border-top:1px solid var(--line); background:var(--panel); font-family:var(--mono); font-size:11px; color:var(--dim); letter-spacing:.03em; display:flex; gap:14px; flex-wrap:wrap}
+  footer b{color:var(--dim)}
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand"><b>Snoop</b> Catcher</span>
+  <span id="status" class="status"><span class="dot"></span><span id="statusText">Booting</span></span>
+  <div class="spacer"></div>
+
+  <button id="enrollBtn" class="primary" disabled>Enroll my face</button>
+  <button id="watchBtn" disabled>Start watching</button>
+
+  <div class="seg" title="Range = head aimed at screen, works far. Precision = eyes on monitor, close range.">
+    <button id="modeRange" class="on">Range</button>
+    <button id="modePrecision">Precision</button>
+  </div>
+
+  <button id="zoneBtn" disabled title="Look at your monitor from where a snooper would be, then capture. Repeat from a few spots.">Set trigger zone</button>
+  <span class="pill" id="zonePill">zone: 0</span>
+  <button id="zoneClear" class="danger" title="Clear captured trigger-zone samples">Clear zone</button>
+
+  <div class="ctl">
+    <label title="How strict 'that's me' recognition is.">Me match
+      <span style="display:inline-flex;flex-direction:column;align-items:center">
+        <input id="meThresh" type="range" min="0.28" max="0.62" step="0.01" value="0.40">
+        <span class="cap">loose ‹ › strict</span>
+      </span>
+    </label>
+  </div>
+  <div class="ctl">
+    <label title="How close a coworker's gaze must match the trigger zone before it fires.">Trigger
+      <span style="display:inline-flex;flex-direction:column;align-items:center">
+        <input id="tol" type="range" min="0.05" max="0.5" step="0.01" value="0.2">
+        <span class="cap">tight ‹ › loose</span>
+      </span>
+    </label>
+  </div>
+
+  <div class="ctl">
+    <label title="How long a snooper must keep looking before the popup fires. Higher = ignores quick glances and gives you time to see the red box in debug.">Delay
+      <span style="display:inline-flex;flex-direction:column;align-items:center">
+        <input id="delay" type="range" min="0" max="5" step="0.25" value="1.5">
+        <span class="cap" id="delayCap">1.5s</span>
+      </span>
+    </label>
+  </div>
+
+  <div class="ctl"><label><input type="checkbox" id="debug"> Debug</label></div>
+  <button id="installBtn" class="primary" style="display:none">Install app</button>
+  <button id="fsBtn">Fullscreen</button>
+  <button id="resetBtn" class="danger" title="Forget my enrolled face">Reset</button>
+</header>
+
+<main>
+  <div class="monitor" id="monitor">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas class="ov" id="overlay"></canvas>
+    <div class="rec" id="rec" style="display:none"><span class="dot"></span>WATCHING</div>
+    <div class="countdown" id="countdown"></div>
+    <div class="cam-hint" id="camHint">Loading models…</div>
+  </div>
+</main>
+
+<footer>
+  <span>Runs 100% in this browser — <b>no images or data leave your machine.</b></span>
+  <span id="fps"></span>
+  <span id="faces"></span>
+  <span id="modeNote"></span>
+</footer>
+
+<div class="gotcha" id="gotcha">
+  <button class="close" id="gotchaClose" aria-label="Close">✕</button>
+  <div><div id="faceHolder"></div><div class="banner" id="gotchaText">👀 BUSTED</div><div class="sub">EYES ON YOUR OWN SCREEN</div><div class="hint">tap ✕ or anywhere to dismiss</div></div>
+</div>
+
+<!-- face-api (recognition: "is this me") -->
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+<!-- MediaPipe (gaze: head pose + iris) loaded as a module below -->
+<script type="module">
+import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.mjs";
+
+const FACEAPI_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/";
+const MP_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/wasm";
+const MP_MODEL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const STORE_KEY = "snoopcatch.me.v1";
+const ZONE_KEY  = "snoopcatch.zone.v1";
+
+const $ = id => document.getElementById(id);
+const els = {
+  video:$('video'), ov:$('overlay'), status:$('status'), statusText:$('statusText'),
+  enroll:$('enrollBtn'), watch:$('watchBtn'), reset:$('resetBtn'), fs:$('fsBtn'),
+  modeRange:$('modeRange'), modePrecision:$('modePrecision'),
+  zoneBtn:$('zoneBtn'), zonePill:$('zonePill'), zoneClear:$('zoneClear'),
+  meThresh:$('meThresh'), tol:$('tol'), delay:$('delay'), delayCap:$('delayCap'), debug:$('debug'),
+  camHint:$('camHint'), rec:$('rec'), countdown:$('countdown'),
+  gotcha:$('gotcha'), gotchaText:$('gotchaText'), faceHolder:$('faceHolder'),
+  fps:$('fps'), faces:$('faces'), modeNote:$('modeNote'), install:$('installBtn'),
+};
+
+let landmarker = null;          // MediaPipe
+let meDescriptor = null;        // Float32Array(128) from face-api
+let zoneSamples = [];           // captured "looking at my monitor" features
+let mode = 'range';             // 'range' | 'precision'
+let watching = false;
+let lastSnoopAt = 0;
+let snoopSince = 0;        // when a snooper first appeared continuously (for the delay)
+let cooldownUntil = 0;    // after a manual dismiss, suppress re-popping until this time
+const SNOOP_LINGER_MS = 1600;
+const COOLDOWN_MS = 5000; // snooze after you close the popup
+
+// offscreen processing canvas (un-mirrored) fed to BOTH pipelines so coords match
+const proc = document.createElement('canvas');
+const pctx = proc.getContext('2d', { willReadFrequently:true });
+
+/* ---------- funny faces ---------- */
+const FACES = [
+  `<svg class="face" viewBox="0 0 200 200"><circle cx="100" cy="100" r="92" fill="#fff59d" stroke="#3a1a00" stroke-width="6"/><circle cx="68" cy="82" r="22" fill="#fff" stroke="#3a1a00" stroke-width="5"/><circle cx="132" cy="82" r="22" fill="#fff" stroke="#3a1a00" stroke-width="5"/><circle cx="74" cy="88" r="9" fill="#3a1a00"/><circle cx="126" cy="76" r="9" fill="#3a1a00"/><path d="M60 130 Q100 175 140 130" fill="none" stroke="#3a1a00" stroke-width="7" stroke-linecap="round"/><ellipse cx="100" cy="150" rx="14" ry="20" fill="#ff5e7a"/></svg>`,
+  `<svg class="face" viewBox="0 0 200 200"><circle cx="100" cy="100" r="92" fill="#a5f3d0" stroke="#3a1a00" stroke-width="6"/><path d="M46 78 L92 92" stroke="#3a1a00" stroke-width="7" stroke-linecap="round"/><path d="M154 78 L108 92" stroke="#3a1a00" stroke-width="7" stroke-linecap="round"/><circle cx="70" cy="98" r="8" fill="#3a1a00"/><circle cx="130" cy="98" r="8" fill="#3a1a00"/><path d="M64 138 Q100 120 136 138" fill="none" stroke="#3a1a00" stroke-width="7" stroke-linecap="round"/></svg>`,
+  `<svg class="face" viewBox="0 0 200 200"><circle cx="100" cy="100" r="92" fill="#c4b5fd" stroke="#3a1a00" stroke-width="6"/><rect x="52" y="70" width="34" height="34" rx="4" fill="#fff" stroke="#3a1a00" stroke-width="5"/><rect x="114" y="70" width="34" height="34" rx="4" fill="#fff" stroke="#3a1a00" stroke-width="5"/><line x1="86" y1="82" x2="114" y2="82" stroke="#3a1a00" stroke-width="5"/><circle cx="69" cy="87" r="6" fill="#3a1a00"/><circle cx="131" cy="87" r="6" fill="#3a1a00"/><path d="M70 145 L130 145" stroke="#3a1a00" stroke-width="7" stroke-linecap="round"/></svg>`,
+];
+const BANNERS = ["👀 BUSTED","NICE TRY","EYES OFF","GOTCHA","SEEN YOU","MIND YOUR MONITOR"];
+
+function setStatus(t,c){ els.statusText.textContent=t; els.status.className="status"+(c?" "+c:""); }
+
+/* ---------- boot ---------- */
+async function boot(){
+  try{
+    setStatus("Loading models","warm");
+    const fileset = await FilesetResolver.forVisionTasks(MP_WASM);
+    landmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:MP_MODEL, delegate:"GPU" },
+      runningMode:"VIDEO", numFaces:5,
+      outputFaceBlendshapes:false, outputFacialTransformationMatrixes:false
+    });
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(FACEAPI_MODELS),
+      faceapi.nets.faceLandmark68Net.loadFromUri(FACEAPI_MODELS),
+      faceapi.nets.faceRecognitionNet.loadFromUri(FACEAPI_MODELS),
+    ]);
+  }catch(e){
+    console.error(e);
+    els.camHint.innerHTML="Couldn't load the detection models.<br>Check your internet connection (needed once) and reload.";
+    setStatus("No models","alarm"); return;
+  }
+  try{
+    setStatus("Starting camera","warm");
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:{ideal:1280}, height:{ideal:720}, facingMode:"user" } });
+    els.video.srcObject = stream;
+    await els.video.play().catch(()=>{});
+  }catch(e){
+    els.camHint.innerHTML="Camera access was blocked.<br>Allow camera for this page and reload.";
+    setStatus("No camera","alarm"); return;
+  }
+  // size the processing canvas (~800px wide keeps both pipelines fast)
+  const vw = els.video.videoWidth||1280, vh = els.video.videoHeight||720;
+  const pw = 800, ph = Math.round(pw*vh/vw);
+  proc.width=pw; proc.height=ph; els.ov.width=pw; els.ov.height=ph;
+
+  els.camHint.style.display="none";
+  els.enroll.disabled=false; els.zoneBtn.disabled=false;
+
+  meDescriptor = loadMe();
+  zoneSamples = loadZone();
+  updateZonePill();
+  if(meDescriptor){ els.watch.disabled=false; setStatus("Ready — enrolled","armed"); }
+  else setStatus("Enroll your face","warm");
+  updateModeNote();
+}
+
+/* ---------- draw current frame to processing canvas (un-mirrored) ---------- */
+function grabFrame(){ pctx.drawImage(els.video, 0, 0, proc.width, proc.height); }
+
+/* ---------- MediaPipe gaze feature ---------- */
+// returns array of faces: { cx,cy (px), box, feat:{yaw,pitch,ih,iv}, eyePx }
+function detectGaze(tsMs){
+  const res = landmarker.detectForVideo(proc, tsMs);
+  const out = [];
+  if(!res || !res.faceLandmarks) return out;
+  const W=proc.width, H=proc.height;
+  for(const lm of res.faceLandmarks){
+    const P = i => ({ x:lm[i].x*W, y:lm[i].y*H });
+    const nose=P(1), L=P(234), R=P(454), chin=P(152);
+    const faceW = Math.hypot(R.x-L.x, R.y-L.y) || 1;
+    // head yaw: nose position between cheeks (0 = frontal)
+    const yaw = ((nose.x - L.x)/((R.x - L.x)||1)) - 0.5;
+    // eyes
+    const eR_in=P(133), eR_out=P(33), eR_top=P(159), eR_bot=P(145), irisR=P(468);
+    const eL_in=P(362), eL_out=P(263), eL_top=P(386), eL_bot=P(374), irisL=P(473);
+    const eyeMidY = (eR_top.y+eR_bot.y+eL_top.y+eL_bot.y)/4;
+    // head pitch proxy: nose vertical between eye-line and chin
+    const pitch = ((nose.y - eyeMidY)/((chin.y - eyeMidY)||1)) - 0.5;
+    // iris horizontal/vertical offset within each eye, averaged
+    const hx = e => (e.iris.x-(e.a.x+e.b.x)/2)/((Math.abs(e.a.x-e.b.x))||1);
+    const vy = e => (e.iris.y-(e.t.y+e.bt.y)/2)/((Math.abs(e.bt.y-e.t.y))||1);
+    const ih = (hx({iris:irisR,a:eR_in,b:eR_out}) + hx({iris:irisL,a:eL_in,b:eL_out}))/2;
+    const iv = (vy({iris:irisR,t:eR_top,bt:eR_bot}) + vy({iris:irisL,t:eL_top,bt:eL_bot}))/2;
+    // bounding box from landmark extents
+    let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
+    for(const p of lm){ minx=Math.min(minx,p.x*W); maxx=Math.max(maxx,p.x*W); miny=Math.min(miny,p.y*H); maxy=Math.max(maxy,p.y*H); }
+    const eyePx = Math.abs(eR_out.x-eR_in.x); // pixels across one eye => confidence for iris
+    out.push({ cx:nose.x, cy:nose.y, box:{x:minx,y:miny,w:maxx-minx,h:maxy-miny}, feat:{yaw,pitch,ih,iv}, faceW, eyePx });
+  }
+  return out;
+}
+
+/* ---------- gaze -> "is this looking at my monitor?" ---------- */
+function featDist(a,b,useIris){
+  let d = (a.yaw-b.yaw)**2 + (a.pitch-b.pitch)**2;
+  if(useIris) d += 2.2*((a.ih-b.ih)**2) + 2.2*((a.iv-b.iv)**2); // weight eyes more
+  return Math.sqrt(d);
+}
+function looksAtMonitor(feat){
+  const tol = parseFloat(els.tol.value);
+  if(mode==='range'){
+    // "head aimed at screen" = roughly frontal (facing the camera/monitor).
+    // If a zone is calibrated, match its head direction; else use frontal (yaw~0).
+    if(zoneSamples.length){
+      return zoneSamples.some(s => Math.hypot(feat.yaw-s.yaw, feat.pitch-s.pitch) < tol);
+    }
+    return Math.abs(feat.yaw) < tol;   // facing screen horizontally
+  } else {
+    // precision: needs calibrated eyes-on-monitor samples
+    if(!zoneSamples.length) return false;
+    return zoneSamples.some(s => featDist(feat,s,true) < tol);
+  }
+}
+
+/* ---------- recognition: is a given face ME? ---------- */
+async function recognizeMe(){
+  // run face-api on same processing canvas; returns array of {cx,cy,dist}
+  const dets = await faceapi.detectAllFaces(proc, new faceapi.TinyFaceDetectorOptions({inputSize:416, scoreThreshold:0.4}))
+    .withFaceLandmarks().withFaceDescriptors();
+  return dets.map(d => {
+    const b=d.detection.box;
+    const dist = meDescriptor ? faceapi.euclideanDistance(d.descriptor, meDescriptor) : 1;
+    return { cx:b.x+b.width/2, cy:b.y+b.height/2, dist };
+  });
+}
+
+/* ---------- enrollment ---------- */
+async function enroll(){
+  els.enroll.disabled=true;
+  const samples=[]; const NEED=8;
+  for(let i=0;i<24 && samples.length<NEED;i++){
+    setStatus(`Enrolling ${samples.length}/${NEED}`,"warm");
+    grabFrame();
+    const det = await faceapi.detectSingleFace(proc, new faceapi.TinyFaceDetectorOptions({inputSize:416, scoreThreshold:0.4}))
+      .withFaceLandmarks().withFaceDescriptor();
+    if(det) samples.push(det.descriptor);
+    await new Promise(r=>setTimeout(r,120));
+  }
+  els.enroll.disabled=false;
+  if(samples.length<3){ setStatus("Enroll failed — try again","alarm"); return; }
+  const avg=new Float32Array(128);
+  for(const d of samples) for(let k=0;k<128;k++) avg[k]+=d[k];
+  for(let k=0;k<128;k++) avg[k]/=samples.length;
+  meDescriptor=avg; saveMe(avg);
+  els.watch.disabled=false; setStatus("Enrolled ✓","armed");
+}
+
+/* ---------- calibration: capture "looking at my monitor" ---------- */
+async function captureZone(){
+  els.zoneBtn.disabled=true;
+  for(let n=3;n>=1;n--){ els.countdown.textContent=n; els.countdown.classList.add('show'); await new Promise(r=>setTimeout(r,700)); }
+  els.countdown.classList.remove('show');
+  grabFrame();
+  const faces = detectGaze(performance.now());
+  els.zoneBtn.disabled=false;
+  if(!faces.length){ setStatus("No face to capture — try again","alarm"); return; }
+  // capture the largest (closest / most prominent) face's gaze
+  faces.sort((a,b)=>b.faceW-a.faceW);
+  zoneSamples.push(faces[0].feat);
+  saveZone(); updateZonePill();
+  setStatus(`Zone captured (${zoneSamples.length})`,"armed");
+}
+function updateZonePill(){ els.zonePill.textContent = `zone: ${zoneSamples.length}`; }
+
+/* ---------- persistence ---------- */
+function saveMe(d){ try{localStorage.setItem(STORE_KEY,JSON.stringify(Array.from(d)));}catch(e){} }
+function loadMe(){ try{const r=localStorage.getItem(STORE_KEY); return r?new Float32Array(JSON.parse(r)):null;}catch(e){return null;} }
+function saveZone(){ try{localStorage.setItem(ZONE_KEY,JSON.stringify(zoneSamples));}catch(e){} }
+function loadZone(){ try{const r=localStorage.getItem(ZONE_KEY); return r?JSON.parse(r):[];}catch(e){return [];} }
+function resetMe(){ meDescriptor=null; try{localStorage.removeItem(STORE_KEY);}catch(e){} stopWatching(); els.watch.disabled=true; setStatus("Enroll your face","warm"); }
+
+/* ---------- watch loop ---------- */
+let loopTimer=null, lastT=performance.now(), frames=0;
+async function tick(){
+  if(!watching) return;
+  const now=performance.now();
+  grabFrame();
+
+  const gaze = detectGaze(now);          // MediaPipe: where each face looks
+  const known = await recognizeMe();     // face-api: which face is me
+
+  const meThresh = parseFloat(els.meThresh.value);
+  let snooper=false; const draw=[];
+
+  // The largest face is front-and-center = almost certainly you. Used as a fallback
+  // so a dropped recognition frame doesn't flag you as a snooper.
+  let largestIdx=-1, largestW=-1;
+  gaze.forEach((f,i)=>{ if(f.faceW>largestW){ largestW=f.faceW; largestIdx=i; } });
+
+  gaze.forEach((f,i)=>{
+    // nearest recognition result by position; radius scales with face size
+    let bestDist=99, bestPos=1e9;
+    for(const k of known){
+      const d=Math.hypot(k.cx-f.cx, k.cy-f.cy);
+      if(d<bestPos){ bestPos=d; bestDist=k.dist; }
+    }
+    const matched = bestPos < Math.max(90, f.faceW*0.7);
+    const meDist = matched ? bestDist : null;                 // null = recognition unavailable
+    const recognizedMe       = matched && bestDist <  meThresh;
+    const recognizedStranger = matched && bestDist >= meThresh;
+    // largest face defaults to "you" unless positively identified as a stranger
+    const isMe = recognizedMe || (i===largestIdx && !recognizedStranger);
+
+    const looking = looksAtMonitor(f.feat);
+    // in precision mode, ignore faces too far for reliable iris (eyes too small)
+    const irisOK = mode==='range' || f.eyePx>=9;
+    const flagged = !isMe && looking && irisOK;
+    if(flagged) snooper=true;
+    draw.push({box:f.box, isMe, meDist, looking, irisOK, flagged, feat:f.feat});
+  });
+
+  // dwell delay: snooper must keep looking for `dwell` ms before the popup fires
+  const dwell = parseFloat(els.delay.value)*1000;
+  if(snooper){ if(!snoopSince) snoopSince=now; } else { snoopSince=0; }
+  const inCooldown = now < cooldownUntil;
+  const qualified = !inCooldown && snoopSince && (now - snoopSince >= dwell);
+  if(qualified) lastSnoopAt=now;
+  const active=(now-lastSnoopAt)<SNOOP_LINGER_MS;
+  if(active && !els.gotcha.classList.contains('show')) showGotcha();
+  else if(!active && els.gotcha.classList.contains('show')) hideGotcha();
+
+  let armMsg='';
+  if(snoopSince) armMsg = inCooldown ? 'snoozed' : (qualified ? 'POP' : `arming ${((now-snoopSince)/1000).toFixed(1)}/${(dwell/1000).toFixed(1)}s`);
+  drawOverlay(draw, armMsg);
+  frames++;
+  if(now-lastT>500){ const fps=Math.round(frames*1000/(now-lastT)); frames=0; lastT=now;
+    els.fps.innerHTML=`<b>~${fps} fps</b>`; els.faces.textContent=gaze.length?`${gaze.length} face(s)`:`no faces`; }
+  setStatus(active?"Snooper!":"Watching", active?"alarm":"armed");
+  loopTimer=setTimeout(()=>requestAnimationFrame(tick),150);  // ~4-5 fps
+}
+
+/* ---------- overlay ---------- */
+function drawOverlay(items, armMsg){
+  const ctx=els.ov.getContext('2d');
+  ctx.clearRect(0,0,els.ov.width,els.ov.height);
+  if(!els.debug.checked) return;
+  ctx.lineWidth=3; ctx.font="13px monospace"; ctx.textBaseline="bottom";
+  for(const it of items){
+    const {x,y,w,h}=it.box;
+    const color = it.flagged? "#ff4d4d" : it.isMe? "#39d98a" : it.looking? "#f0b429" : "#7d8b92";
+    ctx.strokeStyle=color; ctx.strokeRect(x,y,w,h);
+    const dtxt = it.meDist==null ? 'd?' : 'd'+it.meDist.toFixed(2);
+    const tag = it.isMe? `YOU ${dtxt}`
+      : (it.flagged? `SNOOPER ${dtxt}` : (it.looking? `other ${dtxt} (far)` : `other ${dtxt}`));
+    ctx.save(); ctx.scale(-1,1);
+    ctx.fillStyle=color;
+    ctx.fillText(tag, -(x+w), y-4);
+    ctx.fillText(`y${it.feat.yaw.toFixed(2)} p${it.feat.pitch.toFixed(2)} e${it.feat.ih.toFixed(2)},${it.feat.iv.toFixed(2)}`, -(x+w), y+h+14);
+    ctx.restore();
+  }
+  if(armMsg){
+    ctx.save(); ctx.scale(-1,1);
+    ctx.font="bold 16px monospace"; ctx.textBaseline="top";
+    ctx.fillStyle = armMsg==='POP' ? "#ff4d4d" : "#f0b429";
+    ctx.fillText(armMsg, -(els.ov.width-10), 10);
+    ctx.restore();
+  }
+}
+
+/* ---------- gotcha ---------- */
+function showGotcha(){ els.faceHolder.innerHTML=FACES[Math.floor(Math.random()*FACES.length)]; els.gotchaText.textContent=BANNERS[Math.floor(Math.random()*BANNERS.length)]; els.gotcha.classList.add('show'); try{window.snoopcatcher&&window.snoopcatcher.popup&&window.snoopcatcher.popup();}catch(e){} }
+function hideGotcha(){ els.gotcha.classList.remove('show'); }
+
+/* ---------- watch controls ---------- */
+function startWatching(){ if(!meDescriptor) return;
+  if(mode==='precision' && !zoneSamples.length){ setStatus("Precision needs a trigger zone first","alarm"); return; }
+  watching=true; els.watch.textContent="Stop watching"; els.rec.style.display="flex"; setStatus("Watching","armed"); tick(); }
+function stopWatching(){ watching=false; if(loopTimer) clearTimeout(loopTimer); els.watch.textContent="Start watching"; els.rec.style.display="none"; hideGotcha();
+  const ctx=els.ov.getContext('2d'); ctx&&ctx.clearRect(0,0,els.ov.width,els.ov.height); }
+
+function setMode(m){ mode=m; els.modeRange.classList.toggle('on',m==='range'); els.modePrecision.classList.toggle('on',m==='precision'); updateModeNote(); }
+function updateModeNote(){
+  els.modeNote.textContent = mode==='range'
+    ? "Range: flags any non-you face aimed at your screen (to ~10 ft; can't tell 'at me' vs 'at screen')."
+    : "Precision: flags eyes-on-monitor, best 3–6 ft. Calibrate the trigger zone first.";
+}
+
+/* ---------- wire up ---------- */
+els.enroll.addEventListener('click', enroll);
+els.watch.addEventListener('click', ()=> watching?stopWatching():startWatching());
+els.reset.addEventListener('click', resetMe);
+els.zoneBtn.addEventListener('click', captureZone);
+els.zoneClear.addEventListener('click', ()=>{ zoneSamples=[]; saveZone(); updateZonePill(); setStatus("Zone cleared","warm"); });
+els.modeRange.addEventListener('click', ()=>setMode('range'));
+els.modePrecision.addEventListener('click', ()=>setMode('precision'));
+els.fs.addEventListener('click', ()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); });
+els.delay.addEventListener('input', ()=>{ els.delayCap.textContent = parseFloat(els.delay.value).toFixed(2).replace(/0$/,'')+'s'; });
+function dismissGotcha(){ hideGotcha(); snoopSince=0; lastSnoopAt=0; cooldownUntil=performance.now()+COOLDOWN_MS; try{window.snoopcatcher&&window.snoopcatcher.dismiss&&window.snoopcatcher.dismiss();}catch(e){} }
+$('gotchaClose').addEventListener('click', (e)=>{ e.stopPropagation(); dismissGotcha(); });
+els.gotcha.addEventListener('click', dismissGotcha);
+
+boot();
+
+/* ---------- PWA ---------- */
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{})); }
+let deferredPrompt=null;
+window.addEventListener('beforeinstallprompt',(e)=>{ e.preventDefault(); deferredPrompt=e; els.install.style.display='inline-block'; });
+els.install.addEventListener('click', async ()=>{ if(!deferredPrompt) return; deferredPrompt.prompt(); await deferredPrompt.userChoice; deferredPrompt=null; els.install.style.display='none'; });
+window.addEventListener('appinstalled',()=>{ els.install.style.display='none'; });
+</script>
+</body>
+</html>

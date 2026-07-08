@@ -1,0 +1,25 @@
+{
+  "name": "snoop-catcher",
+  "version": "1.0.0",
+  "description": "Watches your webcam and pops a funny face when someone who isn't you looks at your screen.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "author": "Yaakov",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.snoopcatcher.app",
+    "productName": "Snoop Catcher",
+    "files": ["main.js", "preload.js", "app/**/*"],
+    "directories": { "buildResources": "build" },
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg", "category": "public.app-category.utilities" },
+    "linux": { "target": "AppImage" }
+  }
+}

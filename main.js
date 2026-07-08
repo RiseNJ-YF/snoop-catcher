@@ -1,0 +1,99 @@
+const { app, BrowserWindow, Tray, Menu, session, nativeImage, ipcMain } = require('electron');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+const APP_DIR = path.join(__dirname, 'app');
+const MIME = {
+  '.html':'text/html', '.js':'text/javascript', '.mjs':'text/javascript',
+  '.json':'application/json', '.webmanifest':'application/manifest+json',
+  '.png':'image/png', '.svg':'image/svg+xml', '.ico':'image/x-icon', '.css':'text/css'
+};
+
+let server, baseURL, win, tray;
+
+// Serve the app/ folder over 127.0.0.1 so it runs in a secure context
+// (needed for camera + service worker; file:// is not trusted for getUserMedia).
+function startServer(){
+  return new Promise((resolve) => {
+    server = http.createServer((req, res) => {
+      let urlPath = decodeURIComponent(req.url.split('?')[0]);
+      if (urlPath === '/') urlPath = '/index.html';
+      const filePath = path.join(APP_DIR, path.normalize(urlPath));
+      if (!filePath.startsWith(APP_DIR)) { res.writeHead(403); res.end('forbidden'); return; }
+      fs.readFile(filePath, (err, data) => {
+        if (err) { res.writeHead(404); res.end('not found'); return; }
+        res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream' });
+        res.end(data);
+      });
+    });
+    server.listen(0, '127.0.0.1', () => {
+      baseURL = `http://127.0.0.1:${server.address().port}/index.html`;
+      resolve();
+    });
+  });
+}
+
+function createWindow(){
+  win = new BrowserWindow({
+    width: 1120, height: 780,
+    backgroundColor: '#0e1113',
+    icon: path.join(APP_DIR, 'icon-512.png'),
+    title: 'Snoop Catcher',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  if (win.removeMenu) win.removeMenu();
+  win.loadURL(baseURL);
+  // Closing the window keeps the app running in the tray (always-on).
+  win.on('close', (e) => { if (!app.isQuitting) { e.preventDefault(); win.hide(); } });
+}
+
+function createTray(){
+  const img = nativeImage.createFromPath(path.join(APP_DIR, 'icon-192.png')).resize({ width: 18, height: 18 });
+  tray = new Tray(img);
+  tray.setToolTip('Snoop Catcher');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Show Snoop Catcher', click: () => { win.show(); win.focus(); } },
+    { type: 'checkbox', label: 'Start at login',
+      checked: app.getLoginItemSettings().openAtLogin,
+      click: (mi) => app.setLoginItemSettings({ openAtLogin: mi.checked }) },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { app.isQuitting = true; app.quit(); } }
+  ]));
+  tray.on('click', () => { win.isVisible() ? win.focus() : win.show(); });
+}
+
+// When the app catches a snooper, blanket the whole monitor over other apps.
+ipcMain.on('snoop-popup', () => {
+  if (!win) return;
+  if (!win.isVisible()) win.show();
+  win.setAlwaysOnTop(true, 'screen-saver'); // sit above other applications
+  win.setFullScreen(true);                  // cover the entire screen
+  win.focus();
+});
+ipcMain.on('snoop-dismiss', () => {
+  if (!win) return;
+  win.setFullScreen(false);
+  win.setAlwaysOnTop(false);
+});
+
+// Single instance so it doesn't launch twice
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { if (win) { win.show(); win.focus(); } });
+  app.whenReady().then(async () => {
+    session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => cb(permission === 'media'));
+    session.defaultSession.setPermissionCheckHandler((wc, permission) => permission === 'media');
+    await startServer();
+    createWindow();
+    createTray();
+  });
+  // Keep running in the tray even with no window open.
+  app.on('window-all-closed', () => {});
+  app.on('activate', () => { if (win) win.show(); });
+}
