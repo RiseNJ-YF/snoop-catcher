@@ -171,7 +171,8 @@ const els = {
   fps:$('fps'), faces:$('faces'), modeNote:$('modeNote'), install:$('installBtn'),
 };
 
-let landmarker = null;          // MediaPipe
+let landmarker = null;          // MediaPipe (full frame, VIDEO mode)
+let landmarker2 = null;         // MediaPipe (center crop, IMAGE mode) — extends range
 let meDescriptor = null;        // Float32Array(128) from face-api
 let zoneSamples = [];           // captured "looking at my monitor" features
 let mode = 'range';             // 'range' | 'precision'
@@ -185,6 +186,10 @@ const COOLDOWN_MS = 5000; // snooze after you close the popup
 // offscreen processing canvas (un-mirrored) fed to BOTH pipelines so coords match
 const proc = document.createElement('canvas');
 const pctx = proc.getContext('2d', { willReadFrequently:true });
+// central-crop canvas for detecting faces further away (~up to 10 ft)
+const crop = document.createElement('canvas');
+const cctx = crop.getContext('2d', { willReadFrequently:true });
+let cropBox = { x:0, y:0, w:0, h:0 };   // crop region in proc-space coords
 
 /* ---------- funny faces ---------- */
 const FACES = [
@@ -201,11 +206,15 @@ async function boot(){
   try{
     setStatus("Loading models","warm");
     const fileset = await FilesetResolver.forVisionTasks(MP_WASM);
-    landmarker = await FaceLandmarker.createFromOptions(fileset, {
+    const mpOpts = {
       baseOptions:{ modelAssetPath:MP_MODEL, delegate:"GPU" },
-      runningMode:"VIDEO", numFaces:5,
+      numFaces:5,
+      minFaceDetectionConfidence:0.35,   // lower = catches smaller/farther faces
+      minFacePresenceConfidence:0.35,
       outputFaceBlendshapes:false, outputFacialTransformationMatrixes:false
-    });
+    };
+    landmarker  = await FaceLandmarker.createFromOptions(fileset, { ...mpOpts, runningMode:"VIDEO" });
+    landmarker2 = await FaceLandmarker.createFromOptions(fileset, { ...mpOpts, runningMode:"IMAGE" });
     await Promise.all([
       faceapi.nets.tinyFaceDetector.loadFromUri(FACEAPI_MODELS),
       faceapi.nets.faceLandmark68Net.loadFromUri(FACEAPI_MODELS),
@@ -218,17 +227,20 @@ async function boot(){
   }
   try{
     setStatus("Starting camera","warm");
-    const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:{ideal:1280}, height:{ideal:720}, facingMode:"user" } });
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:{ideal:1920}, height:{ideal:1080}, facingMode:"user" } });
     els.video.srcObject = stream;
     await els.video.play().catch(()=>{});
   }catch(e){
     els.camHint.innerHTML="Camera access was blocked.<br>Allow camera for this page and reload.";
     setStatus("No camera","alarm"); return;
   }
-  // size the processing canvas (~800px wide keeps both pipelines fast)
+  // size the processing canvas
   const vw = els.video.videoWidth||1280, vh = els.video.videoHeight||720;
-  const pw = 800, ph = Math.round(pw*vh/vw);
+  const pw = 960, ph = Math.round(pw*vh/vw);
   proc.width=pw; proc.height=ph; els.ov.width=pw; els.ov.height=ph;
+  // central crop = middle 55% of the frame, drawn at native detail for extra reach
+  cropBox = { x:pw*0.225, y:ph*0.225, w:pw*0.55, h:ph*0.55 };
+  crop.width = 720; crop.height = Math.round(720*ph/pw);
 
   els.camHint.style.display="none";
   els.enroll.disabled=false; els.zoneBtn.disabled=false;
@@ -245,36 +257,46 @@ async function boot(){
 function grabFrame(){ pctx.drawImage(els.video, 0, 0, proc.width, proc.height); }
 
 /* ---------- MediaPipe gaze feature ---------- */
-// returns array of faces: { cx,cy (px), box, feat:{yaw,pitch,ih,iv}, eyePx }
-function detectGaze(tsMs){
-  const res = landmarker.detectForVideo(proc, tsMs);
+// returns array of faces: { cx,cy (px), box, feat:{yaw,pitch,ih,iv}, eyePx, faceW }
+// ox,oy,sw,sh map each face's normalized landmarks into proc-space pixels.
+function facesFromResult(res, ox, oy, sw, sh){
   const out = [];
   if(!res || !res.faceLandmarks) return out;
-  const W=proc.width, H=proc.height;
   for(const lm of res.faceLandmarks){
-    const P = i => ({ x:lm[i].x*W, y:lm[i].y*H });
+    const P = i => ({ x:ox + lm[i].x*sw, y:oy + lm[i].y*sh });
     const nose=P(1), L=P(234), R=P(454), chin=P(152);
     const faceW = Math.hypot(R.x-L.x, R.y-L.y) || 1;
-    // head yaw: nose position between cheeks (0 = frontal)
     const yaw = ((nose.x - L.x)/((R.x - L.x)||1)) - 0.5;
-    // eyes
     const eR_in=P(133), eR_out=P(33), eR_top=P(159), eR_bot=P(145), irisR=P(468);
     const eL_in=P(362), eL_out=P(263), eL_top=P(386), eL_bot=P(374), irisL=P(473);
     const eyeMidY = (eR_top.y+eR_bot.y+eL_top.y+eL_bot.y)/4;
-    // head pitch proxy: nose vertical between eye-line and chin
     const pitch = ((nose.y - eyeMidY)/((chin.y - eyeMidY)||1)) - 0.5;
-    // iris horizontal/vertical offset within each eye, averaged
     const hx = e => (e.iris.x-(e.a.x+e.b.x)/2)/((Math.abs(e.a.x-e.b.x))||1);
     const vy = e => (e.iris.y-(e.t.y+e.bt.y)/2)/((Math.abs(e.bt.y-e.t.y))||1);
     const ih = (hx({iris:irisR,a:eR_in,b:eR_out}) + hx({iris:irisL,a:eL_in,b:eL_out}))/2;
     const iv = (vy({iris:irisR,t:eR_top,bt:eR_bot}) + vy({iris:irisL,t:eL_top,bt:eL_bot}))/2;
-    // bounding box from landmark extents
     let minx=1e9,miny=1e9,maxx=-1e9,maxy=-1e9;
-    for(const p of lm){ minx=Math.min(minx,p.x*W); maxx=Math.max(maxx,p.x*W); miny=Math.min(miny,p.y*H); maxy=Math.max(maxy,p.y*H); }
-    const eyePx = Math.abs(eR_out.x-eR_in.x); // pixels across one eye => confidence for iris
+    for(const p of lm){ const x=ox+p.x*sw, y=oy+p.y*sh; if(x<minx)minx=x; if(x>maxx)maxx=x; if(y<miny)miny=y; if(y>maxy)maxy=y; }
+    const eyePx = Math.abs(eR_out.x-eR_in.x);
     out.push({ cx:nose.x, cy:nose.y, box:{x:minx,y:miny,w:maxx-minx,h:maxy-miny}, feat:{yaw,pitch,ih,iv}, faceW, eyePx });
   }
   return out;
+}
+
+function detectGaze(tsMs){
+  // Pass 1: full frame (catches near + wide faces).
+  const faces = facesFromResult(landmarker.detectForVideo(proc, tsMs), 0, 0, proc.width, proc.height);
+  // Pass 2: zoomed center crop (catches faces further away, ~up to 10 ft).
+  cctx.drawImage(els.video,
+    els.video.videoWidth*0.225, els.video.videoHeight*0.225, els.video.videoWidth*0.55, els.video.videoHeight*0.55,
+    0, 0, crop.width, crop.height);
+  const cropFaces = facesFromResult(landmarker2.detect(crop), cropBox.x, cropBox.y, cropBox.w, cropBox.h);
+  // Add crop-only faces (skip ones already found in the full-frame pass).
+  const near = proc.width*0.06;
+  for(const cf of cropFaces){
+    if(!faces.some(f => Math.hypot(f.cx-cf.cx, f.cy-cf.cy) < near)) faces.push(cf);
+  }
+  return faces;
 }
 
 /* ---------- gaze -> "is this looking at my monitor?" ---------- */
