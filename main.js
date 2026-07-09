@@ -10,7 +10,7 @@ const MIME = {
   '.png':'image/png', '.svg':'image/svg+xml', '.ico':'image/x-icon', '.css':'text/css'
 };
 
-let server, baseURL, win, tray, popup;
+let server, baseURL, win, tray, popups = [];
 
 // Serve the app/ folder over 127.0.0.1 so it runs in a secure context
 // (needed for camera + service worker; file:// is not trusted for getUserMedia).
@@ -72,41 +72,44 @@ function createTray(){
   tray.on('click', () => { win.isVisible() ? win.focus() : win.show(); });
 }
 
-// A separate always-on-top fullscreen window that shows ONLY the funny face,
-// independent of the main app window (which can be minimized / in the tray).
-function createPopup(){
-  popup = new BrowserWindow({
-    show: false, frame: false, skipTaskbar: true,
-    transparent: true, hasShadow: false,
-    resizable: false, movable: false, minimizable: false, maximizable: false,
-    fullscreenable: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
-  popup.loadFile(path.join(__dirname, 'popup.html'));
-  popup.setAlwaysOnTop(true, 'screen-saver');
+// One transparent always-on-top window per display, so the overlay covers ALL screens.
+function buildPopups(){
+  for (const p of popups) { try { p.destroy(); } catch(_){} }
+  popups = [];
+  for (const d of screen.getAllDisplays()) {
+    const p = new BrowserWindow({
+      show: false, frame: false, skipTaskbar: true,
+      transparent: true, hasShadow: false,
+      resizable: false, movable: false, minimizable: false, maximizable: false,
+      fullscreenable: true,
+      x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height,
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+    p.loadFile(path.join(__dirname, 'popup.html'));
+    p.setAlwaysOnTop(true, 'screen-saver');
+    popups.push(p);
+  }
 }
+function hideAllPopups(){ for (const p of popups) { try { p.hide(); } catch(_){} } }
 
-// Show ONLY the popup over everything; the app window is untouched.
+// Show the overlay on every screen; the app window is untouched.
 ipcMain.on('popup-show', (e, data) => {
-  if (!popup) return;
-  try { popup.setBounds(screen.getPrimaryDisplay().bounds); } catch(_){}
-  // Real desktop blur behind the window on Windows 11 (acrylic); harmless elsewhere.
-  try { popup.setBackgroundMaterial(data && data.style === 'blur' ? 'acrylic' : 'none'); } catch(_){}
-  popup.webContents.send('render', data);
-  popup.setAlwaysOnTop(true, 'screen-saver');
-  popup.show();
-  popup.focus();
+  popups.forEach((p) => {
+    try { p.setBackgroundMaterial(data && data.style === 'blur' ? 'acrylic' : 'none'); } catch(_){}
+    p.webContents.send('render', data);
+    p.setAlwaysOnTop(true, 'screen-saver');
+    p.show();
+  });
+  if (popups[0]) popups[0].focus();
 });
-ipcMain.on('popup-hide', () => {
-  if (popup) popup.hide();
-});
-// Dismiss initiated from inside the popup window -> hide it and tell the app to snooze.
+ipcMain.on('popup-hide', hideAllPopups);
+// Dismiss initiated from inside a popup -> hide all of them and tell the app to snooze.
 ipcMain.on('popup-dismiss', () => {
-  if (popup) popup.hide();
+  hideAllPopups();
   if (win) win.webContents.send('app-dismiss');
 });
 
@@ -121,7 +124,10 @@ if (!app.requestSingleInstanceLock()) {
     await startServer();
     createWindow();
     createTray();
-    createPopup();
+    buildPopups();
+    screen.on('display-added', buildPopups);
+    screen.on('display-removed', buildPopups);
+    screen.on('display-metrics-changed', buildPopups);
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   app.on('activate', () => { if (win) win.show(); });

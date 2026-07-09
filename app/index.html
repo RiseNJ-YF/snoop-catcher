@@ -197,6 +197,7 @@ let lastSnoopAt = 0;
 let snoopSince = 0;        // when a snooper first appeared continuously (for the delay)
 let cooldownUntil = 0;    // after a manual dismiss, suppress re-popping until this time
 let manualHold = false;   // a manual "Test popup" is showing — don't let the watch loop auto-close it
+let gotchaShown = false;  // is the popup currently up (tracked independently of the DOM)
 const SNOOP_LINGER_MS = 1600;
 const COOLDOWN_MS = 5000; // snooze after you close the popup
 
@@ -462,8 +463,8 @@ async function tick(){
   const qualified = !inCooldown && snoopSince && (now - snoopSince >= dwell);
   if(qualified) lastSnoopAt=now;
   const active=(now-lastSnoopAt)<SNOOP_LINGER_MS;
-  if(active && !els.gotcha.classList.contains('show')) showGotcha();
-  else if(!active && !manualHold && els.gotcha.classList.contains('show')) hideGotcha();
+  if(active && !gotchaShown) showGotcha();
+  else if(!active && !manualHold && gotchaShown) hideGotcha();
 
   let armMsg='';
   if(snoopSince) armMsg = inCooldown ? 'snoozed' : (qualified ? 'POP' : `arming ${((now-snoopSince)/1000).toFixed(1)}/${(dwell/1000).toFixed(1)}s`);
@@ -514,8 +515,23 @@ function drawOverlay(items, armMsg){
 }
 
 /* ---------- gotcha ---------- */
-function showGotcha(){ const faceSvg=FACES[Math.floor(Math.random()*FACES.length)]; const banner=BANNERS[Math.floor(Math.random()*BANNERS.length)]; els.faceHolder.innerHTML=faceSvg; els.gotchaText.textContent=banner; els.gotcha.classList.add('show'); try{window.snoopcatcher&&window.snoopcatcher.popupShow&&window.snoopcatcher.popupShow(faceSvg,banner,popupStyle);}catch(e){} }
-function hideGotcha(){ els.gotcha.classList.remove('show'); try{window.snoopcatcher&&window.snoopcatcher.popupHide&&window.snoopcatcher.popupHide();}catch(e){} }
+function showGotcha(){
+  gotchaShown = true;
+  const faceSvg=FACES[Math.floor(Math.random()*FACES.length)];
+  const banner=BANNERS[Math.floor(Math.random()*BANNERS.length)];
+  if(window.snoopcatcher && window.snoopcatcher.popupShow){
+    // Desktop app: show ONLY the separate screen overlay, not inside this window.
+    try{ window.snoopcatcher.popupShow(faceSvg,banner,popupStyle); }catch(e){}
+  } else {
+    // Plain browser: the in-window overlay is the only option.
+    els.faceHolder.innerHTML=faceSvg; els.gotchaText.textContent=banner; els.gotcha.classList.add('show');
+  }
+}
+function hideGotcha(){
+  gotchaShown = false;
+  els.gotcha.classList.remove('show');
+  try{ window.snoopcatcher && window.snoopcatcher.popupHide && window.snoopcatcher.popupHide(); }catch(e){}
+}
 
 /* ---------- watch controls ---------- */
 function startWatching(){ if(!meDescriptor) return;
