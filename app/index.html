@@ -102,6 +102,12 @@
   </div>
   <button id="testBtn" title="Preview the selected popup style now, without waiting for a real trigger">Test popup</button>
 
+  <div class="seg" title="How aggressively to reject junk detections. High = fewer false triggers on posters/objects (but may miss the very farthest faces).">
+    <button id="strictLow">Loose</button>
+    <button id="strictMed" class="on">Medium</button>
+    <button id="strictHigh">Strict</button>
+  </div>
+
   <button id="zoneBtn" disabled title="Look at your monitor from where a snooper would be, then capture. Repeat from a few spots.">Set trigger zone</button>
   <span class="pill" id="zonePill">zone: 0</span>
   <button id="zoneClear" class="danger" title="Clear captured trigger-zone samples">Clear zone</button>
@@ -117,7 +123,7 @@
   <div class="ctl">
     <label title="How close a coworker's gaze must match the trigger zone before it fires.">Trigger
       <span style="display:inline-flex;flex-direction:column;align-items:center">
-        <input id="tol" type="range" min="0.05" max="0.5" step="0.01" value="0.2">
+        <input id="tol" type="range" min="0.05" max="0.5" step="0.01" value="0.14">
         <span class="cap">tight ‹ › loose</span>
       </span>
     </label>
@@ -126,8 +132,8 @@
   <div class="ctl">
     <label title="How long a snooper must keep looking before the popup fires. Higher = ignores quick glances and gives you time to see the red box in debug.">Delay
       <span style="display:inline-flex;flex-direction:column;align-items:center">
-        <input id="delay" type="range" min="0" max="5" step="0.25" value="1.5">
-        <span class="cap" id="delayCap">1.5s</span>
+        <input id="delay" type="range" min="0" max="5" step="0.25" value="2.5">
+        <span class="cap" id="delayCap">2.5s</span>
       </span>
     </label>
   </div>
@@ -180,6 +186,7 @@ const els = {
   reachNear:$('reachNear'), reachFar:$('reachFar'), reachMax:$('reachMax'),
   styleFace:$('styleFace'), styleDim:$('styleDim'), styleBlur:$('styleBlur'),
   testBtn:$('testBtn'),
+  strictLow:$('strictLow'), strictMed:$('strictMed'), strictHigh:$('strictHigh'),
   zoneBtn:$('zoneBtn'), zonePill:$('zonePill'), zoneClear:$('zoneClear'),
   meThresh:$('meThresh'), tol:$('tol'), delay:$('delay'), delayCap:$('delayCap'), debug:$('debug'),
   camHint:$('camHint'), rec:$('rec'), countdown:$('countdown'),
@@ -189,7 +196,7 @@ const els = {
 
 let landmarker = null;          // MediaPipe (full frame, VIDEO mode)
 let landmarker2 = null;         // MediaPipe (center crop, IMAGE mode) — extends range
-let meDescriptor = null;        // Float32Array(128) from face-api
+let meDescriptors = [];         // multiple face-api descriptors of me (varied angles)
 let zoneSamples = [];           // captured "looking at my monitor" features
 let mode = 'range';             // 'range' | 'precision'
 let watching = false;
@@ -219,6 +226,7 @@ function grid(cols, rows){
 const REACH = { near: [], far: grid(2,2), max: grid(3,2) };
 let reach = 'max';
 let popupStyle = 'face';   // 'face' | 'dim' | 'blur'
+let strictness = 'med';    // min face size gate: 'low' | 'med' | 'high'
 
 /* ---------- funny faces ---------- */
 const FACES = [
@@ -238,8 +246,8 @@ async function boot(){
     const mpOpts = {
       baseOptions:{ modelAssetPath:MP_MODEL, delegate:"GPU" },
       numFaces:5,
-      minFaceDetectionConfidence:0.35,   // lower = catches smaller/farther faces
-      minFacePresenceConfidence:0.35,
+      minFaceDetectionConfidence:0.55,   // higher = fewer phantom "faces" on posters/objects
+      minFacePresenceConfidence:0.55,
       outputFaceBlendshapes:false, outputFacialTransformationMatrixes:false
     };
     landmarker  = await FaceLandmarker.createFromOptions(fileset, { ...mpOpts, runningMode:"VIDEO" });
@@ -271,12 +279,13 @@ async function boot(){
   els.camHint.style.display="none";
   els.enroll.disabled=false; els.zoneBtn.disabled=false;
 
-  meDescriptor = loadMe();
+  meDescriptors = loadMe();
   zoneSamples = loadZone();
   updateZonePill();
-  if(meDescriptor){ els.watch.disabled=false; setStatus("Ready — enrolled","armed"); }
+  if(meDescriptors.length){ els.watch.disabled=false; setStatus("Ready — enrolled","armed"); }
   else setStatus("Enroll your face","warm");
   try{ const s=localStorage.getItem('snoopcatch.style.v1'); if(s) setStyle(s); }catch(e){}
+  try{ const st=localStorage.getItem('snoopcatch.strict.v1'); if(st) setStrict(st); }catch(e){}
   updateModeNote();
 }
 
@@ -334,7 +343,9 @@ function detectGaze(tsMs){
       if(!faces.some(g => Math.hypot(g.cx-face.cx, g.cy-face.cy) < near)) faces.push(face);
     }
   }
-  return faces;
+  // Drop detections smaller than the strictness gate (most phantom faces are tiny).
+  const minW = ({low:0.020, med:0.038, high:0.058}[strictness] || 0.038) * proc.width;
+  return faces.filter(f => f.faceW >= minW);
 }
 
 /* ---------- gaze -> "is this looking at my monitor?" ---------- */
@@ -366,7 +377,8 @@ async function recognizeMe(){
     .withFaceLandmarks().withFaceDescriptors();
   return dets.map(d => {
     const b=d.detection.box;
-    const dist = meDescriptor ? faceapi.euclideanDistance(d.descriptor, meDescriptor) : 1;
+    let dist = 1;
+    for(const md of meDescriptors){ const e=faceapi.euclideanDistance(d.descriptor, md); if(e<dist) dist=e; }
     return { cx:b.x+b.width/2, cy:b.y+b.height/2, dist };
   });
 }
@@ -374,22 +386,27 @@ async function recognizeMe(){
 /* ---------- enrollment ---------- */
 async function enroll(){
   els.enroll.disabled=true;
-  const samples=[]; const NEED=8;
-  for(let i=0;i<24 && samples.length<NEED;i++){
-    setStatus(`Enrolling ${samples.length}/${NEED}`,"warm");
+  const samples=[]; const NEED=14;
+  for(let i=0;i<40 && samples.length<NEED;i++){
+    setStatus(`Enrolling ${samples.length}/${NEED} — slowly turn your head`,"warm");
     grabFrame();
     const det = await faceapi.detectSingleFace(proc, new faceapi.TinyFaceDetectorOptions({inputSize:416, scoreThreshold:0.4}))
       .withFaceLandmarks().withFaceDescriptor();
     if(det) samples.push(det.descriptor);
-    await new Promise(r=>setTimeout(r,120));
+    await new Promise(r=>setTimeout(r,140));
   }
   els.enroll.disabled=false;
   if(samples.length<3){ setStatus("Enroll failed — try again","alarm"); return; }
+  // Keep the averaged descriptor plus a spread of individual samples so head turns
+  // and lighting changes still match "me".
   const avg=new Float32Array(128);
   for(const d of samples) for(let k=0;k<128;k++) avg[k]+=d[k];
   for(let k=0;k<128;k++) avg[k]/=samples.length;
-  meDescriptor=avg; saveMe(avg);
-  els.watch.disabled=false; setStatus("Enrolled ✓","armed");
+  const step=Math.max(1,Math.floor(samples.length/6));
+  meDescriptors=[avg];
+  for(let i=0;i<samples.length;i+=step) meDescriptors.push(samples[i]);
+  saveMe(meDescriptors);
+  els.watch.disabled=false; setStatus(`Enrolled ✓ (${meDescriptors.length} samples)`,"armed");
 }
 
 /* ---------- calibration: capture "looking at my monitor" ---------- */
@@ -410,11 +427,19 @@ async function captureZone(){
 function updateZonePill(){ els.zonePill.textContent = `zone: ${zoneSamples.length}`; }
 
 /* ---------- persistence ---------- */
-function saveMe(d){ try{localStorage.setItem(STORE_KEY,JSON.stringify(Array.from(d)));}catch(e){} }
-function loadMe(){ try{const r=localStorage.getItem(STORE_KEY); return r?new Float32Array(JSON.parse(r)):null;}catch(e){return null;} }
+function saveMe(list){ try{localStorage.setItem(STORE_KEY,JSON.stringify(list.map(d=>Array.from(d))));}catch(e){} }
+function loadMe(){
+  try{
+    const r=localStorage.getItem(STORE_KEY); if(!r) return [];
+    const parsed=JSON.parse(r);
+    if(Array.isArray(parsed) && Array.isArray(parsed[0])) return parsed.map(a=>new Float32Array(a)); // new: list of descriptors
+    if(Array.isArray(parsed)) return [new Float32Array(parsed)];                                      // old: single descriptor
+    return [];
+  }catch(e){ return []; }
+}
 function saveZone(){ try{localStorage.setItem(ZONE_KEY,JSON.stringify(zoneSamples));}catch(e){} }
 function loadZone(){ try{const r=localStorage.getItem(ZONE_KEY); return r?JSON.parse(r):[];}catch(e){return [];} }
-function resetMe(){ meDescriptor=null; try{localStorage.removeItem(STORE_KEY);}catch(e){} stopWatching(); els.watch.disabled=true; setStatus("Enroll your face","warm"); }
+function resetMe(){ meDescriptors=[]; try{localStorage.removeItem(STORE_KEY);}catch(e){} stopWatching(); els.watch.disabled=true; setStatus("Enroll your face","warm"); }
 
 /* ---------- watch loop ---------- */
 let loopTimer=null, lastT=performance.now(), frames=0;
@@ -534,7 +559,7 @@ function hideGotcha(){
 }
 
 /* ---------- watch controls ---------- */
-function startWatching(){ if(!meDescriptor) return;
+function startWatching(){ if(!meDescriptors.length) return;
   if(mode==='precision' && !zoneSamples.length){ setStatus("Precision needs a trigger zone first","alarm"); return; }
   watching=true; els.watch.textContent="Stop watching"; els.rec.style.display="flex"; setStatus("Watching","armed"); tick(); }
 function stopWatching(){ watching=false; if(loopTimer) clearTimeout(loopTimer); els.watch.textContent="Start watching"; els.rec.style.display="none"; hideGotcha();
@@ -564,6 +589,10 @@ els.styleFace.addEventListener('click', ()=>setStyle('face'));
 els.styleDim.addEventListener('click', ()=>setStyle('dim'));
 els.styleBlur.addEventListener('click', ()=>setStyle('blur'));
 els.testBtn.addEventListener('click', ()=>{ manualHold=true; showGotcha(); });
+function setStrict(s){ strictness=s; els.strictLow.classList.toggle('on',s==='low'); els.strictMed.classList.toggle('on',s==='med'); els.strictHigh.classList.toggle('on',s==='high'); try{localStorage.setItem('snoopcatch.strict.v1',s);}catch(e){} }
+els.strictLow.addEventListener('click', ()=>setStrict('low'));
+els.strictMed.addEventListener('click', ()=>setStrict('med'));
+els.strictHigh.addEventListener('click', ()=>setStrict('high'));
 els.fs.addEventListener('click', ()=>{ if(!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); });
 els.delay.addEventListener('input', ()=>{ els.delayCap.textContent = parseFloat(els.delay.value).toFixed(2).replace(/0$/,'')+'s'; });
 function dismissGotcha(){ manualHold=false; hideGotcha(); snoopSince=0; lastSnoopAt=0; cooldownUntil=performance.now()+COOLDOWN_MS; }
